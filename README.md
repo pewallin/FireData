@@ -64,8 +64,8 @@ Set up Core Data
 
 FireData requires a couple extra attributes inside your Core Data model.
 
-* __firebaseKey__ with the type __String__ and __Indexed__ property checked
-* __firebaseData__ with the type __String__
+* __firebaseKey__ with the type __String__. The __Indexed__ property should also be checked.
+* __firebaseData__ with the type __String__.
 
 Make sure you add these two attributes to each entity you wish to sync.
 
