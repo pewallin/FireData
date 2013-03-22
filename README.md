@@ -58,6 +58,17 @@ Hold on to FireData
     self.firedata = firedata;
 
 
+Set up Core Data
+----------------
+<img src="https://github.com/overcommitted/FireData/raw/master/FireDataAttributes.png" align="right" width="960px" height="275px" />
+
+FireData requires a couple extra attributes inside your Core Data model.
+
+* __firebaseKey__ with the type __String__ and __Indexed__ property checked
+* __firebaseData__ with the type __String__
+
+Make sure you add these two attributes to each entity you wish to sync.
+
 Example Application
 -------------------
 
@@ -75,4 +86,4 @@ License
 [MIT](https://github.com/overcommitted/FireData/blob/master/LICENSE).
 
 
-[1] https://groups.google.com/d/msg/firebase-talk/lVFOh9Wqwog/FvqWiiuP-_MJ
+[1] [https://groups.google.com/d/msg/firebase-talk/lVFOh9Wqwog/FvqWiiuP-_MJ](https://groups.google.com/d/msg/firebase-talk/lVFOh9Wqwog/FvqWiiuP-_MJ)
