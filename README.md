@@ -1,5 +1,8 @@
+Forked from [https://github.com/overcommitted/FireData](https://github.com/overcommitted/FireData), since removed.
+
 FireData
 ========
+
 FireData seamlessly integrates Core Data with [Firebase](http://www.firebase.com).
 
 
@@ -60,7 +63,7 @@ Hold on to FireData
 
 Set up Core Data
 ----------------
-<img src="https://github.com/overcommitted/FireData/raw/master/FireDataAttributes.png" align="right" width="960px" height="275px" />
+<img src="https://github.com/pewallin/FireData/raw/master/FireDataAttributes.png" align="right" width="960px" height="275px" />
 
 FireData requires a couple extra attributes inside your Core Data model.
 
