@@ -20,7 +20,6 @@ typedef void (^fcdm_void_managedobjectcontext) (NSManagedObjectContext *context)
 
 @interface FireData (CoreData)
 - (void)managedObjectContextObjectsDidChange:(NSNotification *)notification;
-- (void)managedObjectContextDidSave:(NSNotification *)notification;
 - (NSString *)coreDataEntityForFirebase:(Firebase *)firebase;
 - (BOOL)isCoreDataEntityLinked:(NSString *)entity;
 - (NSManagedObject *)fetchCoreDataManagedObjectWithEntityName:(NSString *)entityName firebaseKey:(NSString *)firebaseKey;
@@ -66,7 +65,6 @@ typedef void (^fcdm_void_managedobjectcontext) (NSManagedObjectContext *context)
     NSNotificationCenter *notificationCenter = [NSNotificationCenter defaultCenter];
     if (self.observedManagedObjectContext) {
         [notificationCenter removeObserver:self name:NSManagedObjectContextObjectsDidChangeNotification object:self.observedManagedObjectContext];
-        [notificationCenter removeObserver:self name:NSManagedObjectContextDidSaveNotification object:self.observedManagedObjectContext];
     }
     
     self.observedManagedObjectContext = nil;
@@ -99,7 +97,6 @@ typedef void (^fcdm_void_managedobjectcontext) (NSManagedObjectContext *context)
     if (self.observedManagedObjectContext) {
         NSNotificationCenter *notificationCenter = [NSNotificationCenter defaultCenter];
         [notificationCenter addObserver:self selector:@selector(managedObjectContextObjectsDidChange:) name:NSManagedObjectContextObjectsDidChangeNotification object:self.observedManagedObjectContext];
-        [notificationCenter addObserver:self selector:@selector(managedObjectContextDidSave:) name:NSManagedObjectContextDidSaveNotification object:self.observedManagedObjectContext];
     }
 }
 
@@ -130,25 +127,6 @@ typedef void (^fcdm_void_managedobjectcontext) (NSManagedObjectContext *context)
 @implementation FireData (CoreData)
 - (void)managedObjectContextObjectsDidChange:(NSNotification *)notification
 {
-    NSMutableSet *managedObjects = [[NSMutableSet alloc] init];
-    [managedObjects unionSet:[[notification userInfo] objectForKey:NSInsertedObjectsKey]];
-    [managedObjects unionSet:[[notification userInfo] objectForKey:NSUpdatedObjectsKey]];
-
-    for (NSManagedObject *managedObject in managedObjects) {
-        if (![self isCoreDataEntityLinked:[[managedObject entity] name]]) return;
-        
-        if (![managedObject primitiveValueForKey:self.coreDataKeyAttribute]) {
-            [managedObject setPrimitiveValue:[[self class] firebaseKey] forKey:self.coreDataKeyAttribute];
-        }
-        
-        if (![[managedObject changedValues] objectForKey:self.coreDataDataAttribute]) {
-            [managedObject setPrimitiveValue:nil forKey:self.coreDataDataAttribute];
-        }
-    };
-}
-
-- (void)managedObjectContextDidSave:(NSNotification *)notification
-{
     NSSet *deletedObjects = [[notification userInfo] objectForKey:NSDeletedObjectsKey];
     for (NSManagedObject *managedObject in deletedObjects) {
         Firebase *firebase = [self firebaseForCoreDataEntity:[[managedObject entity] name]];
@@ -157,11 +135,24 @@ typedef void (^fcdm_void_managedobjectcontext) (NSManagedObjectContext *context)
             [child removeValue];
         }
     };
-    
+
     NSMutableSet *managedObjects = [[NSMutableSet alloc] init];
     [managedObjects unionSet:[[notification userInfo] objectForKey:NSInsertedObjectsKey]];
     [managedObjects unionSet:[[notification userInfo] objectForKey:NSUpdatedObjectsKey]];
-    
+
+    for (NSManagedObject *managedObject in managedObjects) {
+        Firebase *firebase = [self firebaseForCoreDataEntity:[[managedObject entity] name]];
+        if (firebase) {
+            if (![managedObject primitiveValueForKey:self.coreDataKeyAttribute]) {
+                [managedObject setPrimitiveValue:[[self class] firebaseKey] forKey:self.coreDataKeyAttribute];
+            }
+            
+            if (![[managedObject changedValues] objectForKey:self.coreDataDataAttribute]) {
+                [managedObject setPrimitiveValue:nil forKey:self.coreDataDataAttribute];
+            }
+        }
+    };
+        
     NSSet *changedObjects = [managedObjects filteredSetUsingPredicate:[NSPredicate predicateWithFormat:@"%K == nil", self.coreDataDataAttribute]];
     for (NSManagedObject *managedObject in changedObjects) {
         Firebase *firebase = [self firebaseForCoreDataEntity:[[managedObject entity] name]];
@@ -268,13 +259,18 @@ typedef void (^fcdm_void_managedobjectcontext) (NSManagedObjectContext *context)
 
 - (void)updateFirebase:(Firebase *)firebase withManagedObject:(NSManagedObject *)managedObject
 {
-    NSDictionary *properties = [managedObject firedata_propertiesDictionaryWithCoreDataKeyAttribute:self.coreDataKeyAttribute coreDataDataAttribute:self.coreDataDataAttribute];
+    NSDictionary *changedAttributes = [managedObject firedata_changedAttributesWithCoreDataKeyAttribute:self.coreDataKeyAttribute coreDataDataAttribute:self.coreDataDataAttribute];
     Firebase *child = [firebase childByAppendingPath:[managedObject valueForKey:self.coreDataKeyAttribute]];
-    NSString *childName = child.name;
-    [child setValue:properties withCompletionBlock:^(NSError *error) {
+    [child updateChildValues:changedAttributes withCompletionBlock:^(NSError *error, Firebase *PW) {
         if (error) {
-            NSLog(@"Error updating %@: %@", childName, error);
+            NSLog(@"Error updating %@", error);
         }
+    }];
+    
+    NSDictionary *changedRelationships = [managedObject firedata_changedRelationshipsWithCoreDataKeyAttribute:self.coreDataKeyAttribute coreDataDataAttribute:self.coreDataDataAttribute];
+    [changedRelationships enumerateKeysAndObjectsUsingBlock:^(NSString *name, id value, BOOL *stop) {
+        Firebase *relationship = [child childByAppendingPath:name];
+        [relationship updateChildValues:value];
     }];
 }
 @end

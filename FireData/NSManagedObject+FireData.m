@@ -10,48 +10,82 @@
 #import "FireDataISO8601DateFormatter.h"
 
 #define FirebaseSyncData [[NSUUID UUID] UUIDString]
+static NSString * const kFireDataDeletedValue = @"";
 
 @implementation NSManagedObject (FireData)
 
-- (NSDictionary *)firedata_propertiesDictionaryWithCoreDataKeyAttribute:(NSString *)coreDataKeyAttribute coreDataDataAttribute:(NSString *)coreDataDataAttribute
+- (NSDictionary *)firedata_changedAttributesWithCoreDataKeyAttribute:(NSString *)coreDataKeyAttribute coreDataDataAttribute:(NSString *)coreDataDataAttribute
 {
-    NSMutableDictionary *properties = [[NSMutableDictionary alloc] init];
+    NSMutableDictionary *changedAttributes = [[NSMutableDictionary alloc] init];
     FireDataISO8601DateFormatter *dateFormatter = [FireDataISO8601DateFormatter sharedFormatter];
     
-    for (id property in [[self entity] properties]) {
-        NSString *name = [property name];
-        if ([name isEqualToString:coreDataKeyAttribute] || [name isEqualToString:coreDataDataAttribute]) continue;
+    NSDictionary *propertiesByName = [[self entity] propertiesByName];
+    NSDictionary *changedValues = [self changedValues];
+    [changedValues enumerateKeysAndObjectsUsingBlock:^(NSString *name, id value, BOOL *stop) {
+        if ([name isEqualToString:coreDataKeyAttribute] || [name isEqualToString:coreDataDataAttribute]) return;
         
+        NSPropertyDescription *property = [propertiesByName objectForKey:name];
         if ([property isKindOfClass:[NSAttributeDescription class]]) {
             NSAttributeDescription *attributeDescription = (NSAttributeDescription *)property;
-            if ([attributeDescription isTransient]) continue;
-            
-            NSString *name = [attributeDescription name];
-            id value = [self valueForKey:name];
-            
-            NSAttributeType attributeType = [attributeDescription attributeType];
-            if ((attributeType == NSDateAttributeType) && ([value isKindOfClass:[NSDate class]]) && (dateFormatter != nil)) {
-                value = [dateFormatter stringFromDate:value];
-            }
-            [properties setValue:value forKey:name];
-        } else if ([property isKindOfClass:[NSRelationshipDescription class]]) {
-            NSRelationshipDescription *relationshipDescription = (NSRelationshipDescription *)property;
-            NSString *name = [relationshipDescription name];
-            
-            if ([relationshipDescription isToMany]) {
-                NSMutableArray *items = [[NSMutableArray alloc] init];
-                for (NSManagedObject *managedObject in [self valueForKey:name]) {
-                    [items addObject:[managedObject valueForKey:coreDataKeyAttribute]];
+            if (![attributeDescription isTransient]) {
+                NSAttributeType attributeType = [attributeDescription attributeType];
+                if ((attributeType == NSDateAttributeType) && ([value isKindOfClass:[NSDate class]]) && (dateFormatter != nil)) {
+                    [changedAttributes setValue:[dateFormatter stringFromDate:value] forKey:name];
+                } else {
+                    [changedAttributes setValue:value forKey:name];
                 }
-                [properties setValue:[items sortedArrayUsingSelector:@selector(caseInsensitiveCompare:)] forKey:name];
-            } else {
-                NSManagedObject *managedObject = [self valueForKey:name];
-                [properties setValue:[managedObject valueForKey:coreDataKeyAttribute] forKey:name];
+            }
+        } else if ([property isKindOfClass:[NSRelationshipDescription class]]) {
+            if (![(NSRelationshipDescription *)property isToMany]) {
+                [changedAttributes setValue:[value valueForKey:coreDataKeyAttribute] forKey:name];
             }
         }
-    }
+    }];
     
-    return [NSDictionary dictionaryWithDictionary:properties];
+    return [[NSDictionary alloc] initWithDictionary:changedAttributes];
+}
+
+- (NSDictionary *)firedata_changedRelationshipsWithCoreDataKeyAttribute:(NSString *)coreDataKeyAttribute coreDataDataAttribute:(NSString *)coreDataDataAttribute
+{
+    NSMutableDictionary *changedRelationships = [[NSMutableDictionary alloc] init];
+    
+    NSDictionary *propertiesByName = [[self entity] propertiesByName];
+    NSDictionary *changedValues = [self changedValues];
+    NSDictionary *committedValues = [self committedValuesForKeys:[changedValues allKeys]];
+    [changedValues enumerateKeysAndObjectsUsingBlock:^(NSString *name, id value, BOOL *stop) {
+        if ([name isEqualToString:coreDataKeyAttribute] || [name isEqualToString:coreDataDataAttribute]) return;
+        
+        NSPropertyDescription *property = [propertiesByName objectForKey:name];
+        if ([property isKindOfClass:[NSRelationshipDescription class]]) {
+            if ([(NSRelationshipDescription *)property isToMany]) {
+                NSMutableDictionary *items = [[NSMutableDictionary alloc] init];
+                NSSet *oldItems = [[NSSet alloc] initWithSet:[committedValues objectForKey:name]];
+                NSSet *currentItems = [[NSSet alloc] initWithSet:value];
+                
+                for (NSManagedObject *managedObject in oldItems) {
+                    if (![currentItems containsObject:managedObject]) {
+                        NSString *identifier = [managedObject valueForKey:coreDataKeyAttribute];
+                        if (identifier) {
+                            [items setValue:kFireDataDeletedValue forKey:identifier];
+                        }
+                    }
+                }
+                
+                for (NSManagedObject *managedObject in currentItems) {
+                    if (![oldItems containsObject:managedObject]) {
+                        NSString *identifier = [managedObject valueForKey:coreDataKeyAttribute];
+                        if (identifier) {
+                            [items setValue:identifier forKey:identifier];
+                        }
+                    }
+                }
+                
+                [changedRelationships setValue:items forKey:name];
+            }
+        }
+    }];
+
+    return [[NSDictionary alloc] initWithDictionary:changedRelationships];
 }
 
 - (void)firedata_setPropertiesForKeysWithDictionary:(NSDictionary *)keyedValues coreDataKeyAttribute:(NSString *)coreDataKeyAttribute coreDataDataAttribute:(NSString *)coreDataDataAttribute
@@ -78,30 +112,51 @@
             [self setValue:value forKey:name];
         } else if ([propertyDescription isKindOfClass:[NSRelationshipDescription class]]) {
             NSFetchRequest *fetchRequest = [NSFetchRequest fetchRequestWithEntityName:[[(NSRelationshipDescription *)propertyDescription destinationEntity] name]];
+            [fetchRequest setFetchLimit:1];
             
             if ([(NSRelationshipDescription *)propertyDescription isToMany]) {
-                NSArray *identifiers = [keyedValues objectForKey:name];
                 NSMutableSet *items = [self mutableSetValueForKey:name];
-                for (NSString *identifier in identifiers) {
+                NSDictionary *identifiers = [keyedValues objectForKey:name];
+                
+                [identifiers enumerateKeysAndObjectsUsingBlock:^(NSString *identifier, id value, BOOL *stop) {
+                    if ([value isEqualToString:kFireDataDeletedValue]) {
+                        NSManagedObject *managedObject = [[items filteredSetUsingPredicate:[NSPredicate predicateWithFormat:@"%K == %@", coreDataKeyAttribute, identifier]] anyObject];
+                        if (managedObject) {
+                            [items removeObject:managedObject];
+                        }
+                    } else {
+                        [fetchRequest setPredicate:[NSPredicate predicateWithFormat:@"%K == %@", coreDataKeyAttribute, identifier]];
+                        NSArray *objects = [self.managedObjectContext executeFetchRequest:fetchRequest error:nil];
+                        if ([objects count] == 1) {
+                            NSManagedObject *managedObject = objects[0];
+                            if (![items containsObject:managedObject]) {
+                                [managedObject setValue:FirebaseSyncData forKey:coreDataDataAttribute];
+                                [items addObject:managedObject];
+                            }
+                        }
+                    }
+                }];
+            } else {
+                NSString *identifier = [keyedValues objectForKey:name];
+                
+                NSManagedObject *managedObject = [self valueForKey:name];
+                NSString *managedObjectIdentifier = [managedObject valueForKey:coreDataKeyAttribute];
+                if (managedObjectIdentifier && ![identifier isEqualToString:managedObjectIdentifier]) {
+                    [managedObject setValue:FirebaseSyncData forKey:coreDataDataAttribute];
+                }
+                
+                if (identifier) {
                     [fetchRequest setPredicate:[NSPredicate predicateWithFormat:@"%K == %@", coreDataKeyAttribute, identifier]];
                     NSArray *objects = [self.managedObjectContext executeFetchRequest:fetchRequest error:nil];
                     if ([objects count] == 1) {
                         NSManagedObject *managedObject = objects[0];
-                        if (![items containsObject:managedObject]) {
+                        if (![[self valueForKey:name] isEqual:managedObject]) {
                             [managedObject setValue:FirebaseSyncData forKey:coreDataDataAttribute];
-                            [items addObject:managedObject];
+                            [self setValue:managedObject forKey:name];
                         }
                     }
-                }
-            } else {
-                [fetchRequest setPredicate:[NSPredicate predicateWithFormat:@"%K == %@", coreDataKeyAttribute, [keyedValues objectForKey:name]]];
-                NSArray *objects = [self.managedObjectContext executeFetchRequest:fetchRequest error:nil];
-                if ([objects count] == 1) {
-                    NSManagedObject *managedObject = objects[0];
-                    if (![[self valueForKey:name] isEqual:managedObject]) {
-                        [managedObject setValue:FirebaseSyncData forKey:coreDataDataAttribute];
-                        [self setValue:managedObject forKey:name];
-                    }
+                } else {
+                    [self setValue:nil forKey:name];
                 }
             }
         }
